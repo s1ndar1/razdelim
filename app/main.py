@@ -5,13 +5,14 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from .bot import send_message
 from .config import BOT_NAME, BOT_TOKEN
-from .database import get_session, init_db
+from .database import engine, get_session, init_db
 from .models import BotUser, Participant, ParticipantStatus, PaymentSession
 from .schemas import (
     ConfirmRequest,
@@ -53,6 +54,16 @@ def status_page():
 @app.get("/organizer")
 def organizer_page():
     return FileResponse(STATIC_DIR / "organizer.html")
+
+
+@app.get("/health")
+def health_check():
+    try:
+        with Session(engine) as session:
+            session.exec(text("SELECT 1"))
+        return {"status": "ok", "db": "ok"}
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "error", "db": "unavailable"})
 
 
 @app.post("/sessions", response_model=SessionOut)

@@ -12,23 +12,32 @@
 - диалог с ботом (`/webhook/max`, `bot_started`) нужен только как *опциональный* канал,
   чтобы бот мог уведомить организатора — и то только если тот уже сам стартовал бота ранее.
 
-## Установка
+## Установка и запуск
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+cd razdelim
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # впишите свой BOT_TOKEN
-docker compose up -d  # поднимет Postgres на localhost:5432
-uvicorn app.main:app --reload
+# если вы используете локальный Postgres
+# docker compose up -d
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Swagger-документация — на `http://localhost:8000/docs`.
+Проверки:
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/
+```
+
+Swagger-документация — на `http://127.0.0.1:8000/docs`.
 
 ## Эндпоинты
 
 | Метод | Путь | Кто вызывает | Что делает |
 |---|---|---|---|
+| `GET` | `/health` | мониторинг/оперативка | проверяет, что API запущено и БД отвечает |
 | `POST` | `/sessions` | организатор (из бота/мини-аппа) | создаёт `PaymentSession`, возвращает диплинк `?startapp=<token>` |
 | `POST` | `/join` | мини-приложение при открытии | валидирует `initData` по HMAC, создаёт `Participant`, возвращает сумму и реквизиты |
 | `POST` | `/confirm` | мини-приложение, кнопка «Я оплатил» | помечает участника `paid`, фоново уведомляет организатора |

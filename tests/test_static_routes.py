@@ -11,6 +11,13 @@ def test_root_page_served():
     assert "Разделим" in response.text
 
 
+def test_health_endpoint_served():
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+
+
 def test_status_page_served():
     response = client.get("/status")
     assert response.status_code == 200
