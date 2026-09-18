@@ -28,6 +28,17 @@ from .security import validate_init_data
 TOKEN_ALPHABET = string.ascii_letters + string.digits  # допустимые символы payload диплинка
 
 
+def serialize_session(payment_session: PaymentSession) -> SessionOut:
+    return SessionOut(
+        id=payment_session.id,
+        title=payment_session.title,
+        total_amount=payment_session.total_amount,
+        head_count=payment_session.head_count,
+        per_head=round(payment_session.total_amount / payment_session.head_count, 2),
+        link=f"https://max.ru/{BOT_NAME}?startapp={payment_session.token}",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -66,6 +77,22 @@ def health_check():
         return JSONResponse(status_code=503, content={"status": "error", "db": "unavailable"})
 
 
+@app.get("/sessions", response_model=list[SessionOut])
+def list_sessions(session: Session = Depends(get_session)):
+    payment_sessions = session.exec(
+        select(PaymentSession).order_by(PaymentSession.id.desc())
+    ).all()
+    return [serialize_session(item) for item in payment_sessions]
+
+
+@app.get("/sessions/{session_id}", response_model=SessionOut)
+def get_session_by_id(session_id: int, session: Session = Depends(get_session)):
+    payment_session = session.get(PaymentSession, session_id)
+    if not payment_session:
+        raise HTTPException(404, "Сессия не найдена")
+    return serialize_session(payment_session)
+
+
 @app.post("/sessions", response_model=SessionOut)
 def create_session(data: SessionCreate, session: Session = Depends(get_session)):
     """Организатор создаёт запрос на скидывание. Возвращает диплинк для группы."""
@@ -87,15 +114,7 @@ def create_session(data: SessionCreate, session: Session = Depends(get_session))
     session.commit()
     session.refresh(payment_session)
 
-    link = f"https://max.ru/{BOT_NAME}?startapp={token}"
-    return SessionOut(
-        id=payment_session.id,
-        title=payment_session.title,
-        total_amount=payment_session.total_amount,
-        head_count=payment_session.head_count,
-        per_head=round(payment_session.total_amount / payment_session.head_count, 2),
-        link=link,
-    )
+    return serialize_session(payment_session)
 
 
 @app.post("/join", response_model=JoinResponse)

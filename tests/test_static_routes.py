@@ -44,6 +44,29 @@ def test_sdk_scripts_are_included_in_pages():
     assert '/static/max-parent-sdk.js' in status.text
 
 
+def test_list_and_fetch_sessions():
+    create_response = client.post(
+        "/sessions",
+        json={
+            "title": "Список сессий",
+            "total_amount": 1200,
+            "head_count": 3,
+            "requisites": "+79990002222"
+        },
+    )
+    assert create_response.status_code == 200
+    session_id = create_response.json()["id"]
+
+    list_response = client.get("/sessions")
+    assert list_response.status_code == 200
+    data = list_response.json()
+    assert any(item["id"] == session_id for item in data)
+
+    detail_response = client.get(f"/sessions/{session_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["id"] == session_id
+
+
 def test_create_session_without_organizer_ids():
     response = client.post(
         "/sessions",
