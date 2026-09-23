@@ -14,8 +14,8 @@ class PaymentSession(SQLModel, table=True):
     """Один запрос организатора: 'скиньтесь на N голов'."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    organizer_id: Optional[int] = None    # user_id организатора из initData, если известен
-    chat_id: Optional[int] = None         # id группового чата, если известен
+    organizer_id: Optional[int] = Field(default=None, nullable=True)
+    chat_id: Optional[int] = Field(default=None, nullable=True)
     title: str
     total_amount: float
     head_count: int

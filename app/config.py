@@ -6,7 +6,7 @@ load_dotenv()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://razdelim:razdelim@localhost:5432/razdelim",
+    "sqlite:///./razdelim.db",
 )
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 BOT_NAME = os.getenv("BOT_NAME", "razdelim_bot")
