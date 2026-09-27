@@ -20,6 +20,8 @@ services:
     build: .
     restart: unless-stopped
     environment:
+      APP_ENV: ${APP_ENV:-production}
+      DEMO_MODE: ${DEMO_MODE:-false}
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-razdelim}:${POSTGRES_PASSWORD:-razdelim}@db:5432/${POSTGRES_DB:-razdelim}
       BOT_TOKEN: ${BOT_TOKEN:-}
       BOT_NAME: ${BOT_NAME:-razdelim_bot}

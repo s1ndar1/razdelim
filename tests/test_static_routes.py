@@ -84,6 +84,88 @@ def test_organizer_endpoints_require_signed_max_user(client):
     assert client.get("/sessions/1/status").status_code == 401
 
 
+def test_user_flows_reject_requests_without_max_init_data(client):
+    create_response = client.post(
+        "/sessions",
+        json={
+            "title": "Без MAX",
+            "total_amount": 100,
+            "head_count": 2,
+            "requisites": "test",
+        },
+    )
+    join_response = client.post("/join", json={"start_param": "test-token"})
+    confirm_response = client.post("/confirm", json={"participant_id": 1})
+
+    assert create_response.status_code == 422
+    assert join_response.status_code == 422
+    assert confirm_response.status_code == 422
+    assert client.get("/sessions/1/status").status_code == 401
+
+
+def test_local_demo_flow_without_max(client, monkeypatch):
+    monkeypatch.setattr(main_module, "APP_ENV", "development")
+    monkeypatch.setattr(main_module, "DEMO_MODE", True)
+    monkeypatch.setattr(main_module, "BOT_TOKEN", "")
+    monkeypatch.setattr(main_module, "is_local_demo", lambda request: True)
+
+    with TestClient(app, base_url="http://127.0.0.1") as local_client:
+        create_response = local_client.post(
+            "/sessions",
+            json={
+                "title": "Тестовый поход",
+                "total_amount": 1200,
+                "head_count": 3,
+                "requisites": "Тестовые реквизиты",
+                "init_data": "DEMO",
+            },
+        )
+        assert create_response.status_code == 200
+        created = create_response.json()
+        assert "demo=participant&startapp=" in created["link"]
+
+        start_param = created["link"].split("startapp=", 1)[1]
+        join_response = local_client.post(
+            "/join",
+            json={"init_data": "DEMO", "start_param": start_param},
+        )
+        assert join_response.status_code == 200
+        participant_id = join_response.json()["participant_id"]
+        assert join_response.json()["share_amount"] == 400
+
+        confirm_response = local_client.post(
+            "/confirm",
+            json={"init_data": "DEMO", "participant_id": participant_id},
+        )
+        assert confirm_response.status_code == 200
+
+        status_response = local_client.get(
+            f"/sessions/{created['id']}/status",
+            headers={"X-Max-Init-Data": "DEMO"},
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["paid_count"] == 1
+
+
+def test_local_demo_is_rejected_for_non_loopback_clients(client, monkeypatch):
+    monkeypatch.setattr(main_module, "APP_ENV", "development")
+    monkeypatch.setattr(main_module, "DEMO_MODE", True)
+    monkeypatch.setattr(main_module, "BOT_TOKEN", "")
+
+    with TestClient(app, base_url="http://example.test") as remote_client:
+        response = remote_client.post(
+            "/sessions",
+            json={
+                "title": "Remote demo",
+                "total_amount": 100,
+                "head_count": 2,
+                "requisites": "test",
+                "init_data": "DEMO",
+            },
+        )
+    assert response.status_code == 503
+
+
 def test_expired_max_init_data_is_rejected(client):
     response = client.post(
         "/sessions",
@@ -177,6 +259,125 @@ def test_session_creation_and_status_are_limited_to_owner(client):
     other_headers = {"X-Max-Init-Data": signed_init_data(202, "Other")}
     assert client.get("/sessions", headers=other_headers).json() == []
     assert client.get(f"/sessions/{session_id}/status", headers=other_headers).status_code == 404
+
+
+def test_equal_mode_distributes_cents_and_closes_at_target(client):
+    organizer_init = signed_init_data(601, "Organizer")
+    create_response = client.post(
+        "/sessions",
+        json={
+            "title": "Поровну с копейками",
+            "total_amount": 10.01,
+            "head_count": 3,
+            "requisites": "test",
+            "payment_mode": "equal",
+            "init_data": organizer_init,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    start_param = created["link"].rsplit("=", 1)[1]
+    shares = []
+
+    for user_id in (611, 612, 613):
+        join_response = client.post(
+            "/join",
+            json={"init_data": signed_init_data(user_id), "start_param": start_param},
+        )
+        assert join_response.status_code == 200
+        participant = join_response.json()
+        shares.append(participant["share_amount"])
+        confirmation = client.post(
+            "/confirm",
+            json={
+                "init_data": signed_init_data(user_id),
+                "participant_id": participant["participant_id"],
+            },
+        )
+        assert confirmation.status_code == 200
+
+    assert shares == [3.34, 3.34, 3.33]
+    headers = {"X-Max-Init-Data": organizer_init}
+    status_response = client.get(f"/sessions/{created['id']}/status", headers=headers)
+    assert status_response.status_code == 200
+    assert status_response.json()["remaining_amount"] == 0
+    assert status_response.json()["paid_count"] == 3
+
+    full_response = client.post(
+        "/join",
+        json={"init_data": signed_init_data(614), "start_param": start_param},
+    )
+    assert full_response.status_code == 409
+
+
+def test_flexible_mode_caps_contributions_and_prevents_double_charge(client):
+    organizer_init = signed_init_data(701, "Organizer")
+    create_response = client.post(
+        "/sessions",
+        json={
+            "title": "Свободные взносы",
+            "total_amount": 100,
+            "head_count": 4,
+            "requisites": "test",
+            "payment_mode": "flexible",
+            "init_data": organizer_init,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    start_param = created["link"].rsplit("=", 1)[1]
+    user_id = 711
+    user_init = signed_init_data(user_id)
+    join_response = client.post(
+        "/join",
+        json={"init_data": user_init, "start_param": start_param},
+    )
+    assert join_response.status_code == 200
+    participant_id = join_response.json()["participant_id"]
+    assert join_response.json()["payment_mode"] == "flexible"
+    assert join_response.json()["remaining_amount"] == 100
+
+    overpayment = client.post(
+        "/confirm",
+        json={"init_data": user_init, "participant_id": participant_id, "contribution_amount": 100.01},
+    )
+    assert overpayment.status_code == 409
+
+    first_payment = client.post(
+        "/confirm",
+        json={"init_data": user_init, "participant_id": participant_id, "contribution_amount": 35.50},
+    )
+    assert first_payment.status_code == 200
+    duplicate_payment = client.post(
+        "/confirm",
+        json={"init_data": user_init, "participant_id": participant_id, "contribution_amount": 35.50},
+    )
+    assert duplicate_payment.status_code == 200
+    assert duplicate_payment.json()["already_paid"] is True
+
+    other_user_init = signed_init_data(712)
+    other_join = client.post(
+        "/join",
+        json={"init_data": other_user_init, "start_param": start_param},
+    )
+    other_payment = client.post(
+        "/confirm",
+        json={
+            "init_data": other_user_init,
+            "participant_id": other_join.json()["participant_id"],
+            "contribution_amount": 64.50,
+        },
+    )
+    assert other_payment.status_code == 200
+
+    status_response = client.get(
+        f"/sessions/{created['id']}/status",
+        headers={"X-Max-Init-Data": organizer_init},
+    )
+    status = status_response.json()
+    assert status["remaining_amount"] == 0
+    assert status["paid_count"] == 2
+    assert sorted(item["contribution_amount"] for item in status["participants"]) == [35.5, 64.5]
 
 
 def test_list_and_fetch_sessions(client):

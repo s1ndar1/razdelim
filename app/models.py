@@ -19,6 +19,8 @@ class PaymentSession(SQLModel, table=True):
     title: str
     total_amount: float
     head_count: int
+    payment_mode: str = Field(default="equal", max_length=16)
+    remaining_amount_cents: int = Field(default=0, ge=0)
     requisites: str                       # текст: номер телефона + банк для СБП
     token: str = Field(index=True, unique=True)  # payload диплинка (?startapp=...)
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -34,6 +36,7 @@ class Participant(SQLModel, table=True):
     user_id: int
     first_name: Optional[str] = None
     share_amount: float
+    contribution_amount_cents: int = Field(default=0, ge=0)
     status: ParticipantStatus = Field(default=ParticipantStatus.pending)
     joined_at: datetime = Field(default_factory=datetime.utcnow)
     confirmed_at: Optional[datetime] = None

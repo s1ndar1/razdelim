@@ -70,6 +70,11 @@
       font-size: 1.2rem;
       font-weight: 700;
     }
+    .mode-label {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -112,6 +117,7 @@
   <div class="phone-shell">
     <h1 class="title">Статус сборов</h1>
     <p class="subtitle">Проверка участников и оплаты по сессии</p>
+    <p id="demo-notice" class="subtitle" hidden>Демо-режим: отображаются тестовые данные.</p>
 
     <div class="form-row">
       <input id="session-id" type="number" placeholder="ID сессии" value="1" />
@@ -119,6 +125,7 @@
     </div>
 
     <div class="summary" id="summary"></div>
+    <p class="mode-label" id="mode-label"></p>
     <div id="table-wrap"></div>
   </div>
 
@@ -128,9 +135,13 @@
     const sessionInput = document.getElementById('session-id');
     const loadBtn = document.getElementById('load-btn');
     const summary = document.getElementById('summary');
+    const modeLabel = document.getElementById('mode-label');
     const tableWrap = document.getElementById('table-wrap');
-    const initData = window.MaxSdk.getInitData();
-    const requestedSessionId = new URLSearchParams(window.location.search).get('session_id');
+    const query = new URLSearchParams(window.location.search);
+    const demoMode = query.get('demo') === '1';
+    const initData = demoMode ? 'DEMO' : window.MaxSdk.getInitData();
+    const requestedSessionId = query.get('session_id');
+    document.getElementById('demo-notice').hidden = !demoMode;
 
     if (requestedSessionId) {
       sessionInput.value = requestedSessionId;
@@ -172,8 +183,16 @@
     function renderStatus(data) {
       summary.innerHTML = `
         <div class="stat">
-          <span class="stat-label">Всего собрано</span>
+          <span class="stat-label">Цель сбора</span>
           <span class="stat-value">${Number(data.total_amount).toFixed(0)} ₽</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Уже собрано</span>
+          <span class="stat-value">${(Number(data.total_amount) - Number(data.remaining_amount)).toFixed(2)} ₽</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Осталось собрать</span>
+          <span class="stat-value">${Number(data.remaining_amount).toFixed(2)} ₽</span>
         </div>
         <div class="stat">
           <span class="stat-label">Присоединились</span>
@@ -188,6 +207,9 @@
           <span class="stat-value">${data.head_count} чел.</span>
         </div>
       `;
+      modeLabel.textContent = data.payment_mode === 'flexible'
+        ? 'Режим: каждый выбирает сумму взноса'
+        : 'Режим: участники платят поровну';
 
       if (!data.participants || data.participants.length === 0) {
         tableWrap.innerHTML = '<div class="empty">Пока никто не присоединился к сбору.</div>';
@@ -199,7 +221,7 @@
           <thead>
             <tr>
               <th>Участник</th>
-              <th>Доля</th>
+              <th>Взнос</th>
               <th>Статус</th>
             </tr>
           </thead>
@@ -207,7 +229,7 @@
             ${data.participants.map((p) => `
               <tr>
                 <td>${escapeHtml(p.first_name || 'Участник ' + p.user_id)}</td>
-                <td>${Number(p.share_amount).toFixed(0)} ₽</td>
+                <td>${Number(p.contribution_amount || (data.payment_mode === 'equal' ? p.share_amount : 0)).toFixed(2)} ₽</td>
                 <td><span class="status">${p.status === 'paid' ? 'Оплатил' : 'Ожидает'}</span></td>
               </tr>
             `).join('')}

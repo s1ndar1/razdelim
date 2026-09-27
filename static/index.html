@@ -17,8 +17,10 @@
 
     async function init() {
       const app = document.getElementById('app');
-      const startParam = window.WebApp?.initDataUnsafe?.start_param;
-      const initData = window.WebApp?.initData;
+      const query = new URLSearchParams(window.location.search);
+      const demoParticipant = query.get('demo') === 'participant';
+      const startParam = window.WebApp?.initDataUnsafe?.start_param || query.get('startapp');
+      const initData = demoParticipant ? 'DEMO' : window.WebApp?.initData;
 
       if (!initData) {
         app.innerHTML = '<div class="card"><span class="label">Сессия</span><h2>Ссылка не найдена</h2><p class="meta">Откройте мини-приложение по ссылке из чата, чтобы присоединиться к сбору.</p></div>';
@@ -47,16 +49,17 @@
         }
 
         const data = await joinRes.json();
-        renderCard(data);
+        renderCard(data, initData, demoParticipant);
       } catch (error) {
         app.innerHTML = `<div class="card"><span class="label">Ошибка</span><h2>Не удалось присоединиться</h2><p class="meta">${escapeHtml(error.message || 'Попробуйте открыть ссылку ещё раз.')}</p></div>`;
       }
     }
 
-    function renderCard(data) {
+    function renderCard(data, initData, demoParticipant) {
       const app = document.getElementById('app');
       const paid = data.status === 'paid';
       const statusLabel = paid ? 'Оплачено' : 'Ожидает оплаты';
+      const flexible = data.payment_mode === 'flexible';
 
       app.innerHTML = `
         <div class="header">
@@ -66,9 +69,14 @@
 
         <div class="card">
           <span class="label">Сбор</span>
+          ${demoParticipant ? '<p class="meta">Локальное демо: MAX не подключён.</p>' : ''}
           <h2>${escapeHtml(data.session_title)}</h2>
-          <div class="amount">${Number(data.share_amount).toFixed(0)} ₽</div>
-          <p class="meta">Ваша доля участия</p>
+           ${flexible
+            ? `<p class="meta" id="collected-amount">Собрано ${formatAmount(data.total_amount - data.remaining_amount)} ₽ из ${formatAmount(data.total_amount)} ₽</p>
+              <div class="amount" id="remaining-amount">Осталось ${formatAmount(data.remaining_amount)} ₽</div>`
+            : `<div class="amount">${formatAmount(data.share_amount)} ₽</div>
+              <p class="meta">Ваша равная доля</p>
+              <p class="meta">Осталось собрать ${formatAmount(data.remaining_amount)} ₽</p>`}
           <span class="status-pill">${statusLabel}</span>
         </div>
 
@@ -76,12 +84,28 @@
           <strong>Реквизиты:</strong><br />${escapeHtml(data.requisites)}
         </div>
 
-        <button id="confirm-btn" ${paid ? 'disabled' : ''}>${paid ? 'Оплачено' : 'Я оплатил'}</button>
+        ${flexible && !paid && data.remaining_amount > 0
+          ? `<label class="meta" for="contribution-amount">Ваш взнос, ₽</label>
+             <input id="contribution-amount" type="number" min="0.01" max="${data.remaining_amount}" step="0.01" inputmode="decimal" required />`
+          : ''}
+        <button id="confirm-btn" ${paid || (flexible && data.remaining_amount <= 0) ? 'disabled' : ''}>${paid ? 'Оплачено' : flexible ? 'Подтвердить взнос' : 'Я оплатил'}</button>
       `;
 
       const btn = document.getElementById('confirm-btn');
       if (!paid && btn) {
+        const idleButtonLabel = flexible ? 'Подтвердить взнос' : 'Я оплатил';
         btn.addEventListener('click', async () => {
+          const contributionInput = document.getElementById('contribution-amount');
+          const contributionAmount = contributionInput ? Number(contributionInput.value) : null;
+          if (flexible && (!Number.isFinite(contributionAmount) || contributionAmount <= 0 || contributionAmount > data.remaining_amount)) {
+            if (contributionInput && contributionAmount > data.remaining_amount) {
+              contributionInput.setCustomValidity(`Максимальный взнос: ${formatAmount(data.remaining_amount)} ₽`);
+            }
+            contributionInput?.reportValidity();
+            contributionInput?.setCustomValidity('');
+            return;
+          }
+
           btn.disabled = true;
           btn.textContent = 'Подтверждаем…';
 
@@ -90,16 +114,33 @@
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                init_data: window.WebApp?.initData,
+                init_data: initData,
                 participant_id: data.participant_id,
+                ...(flexible ? { contribution_amount: contributionAmount } : {}),
               }),
             });
 
             if (!r.ok) {
-              throw new Error('Не удалось подтвердить оплату');
+              const error = await r.json().catch(() => ({}));
+              throw new Error(error.detail || 'Не удалось подтвердить оплату');
             }
 
+            const confirmation = await r.json();
             btn.textContent = 'Оплачено';
+            if (contributionInput) {
+              contributionInput.disabled = true;
+            }
+            if (flexible && confirmation.remaining_amount !== undefined) {
+              const remainingAmount = Number(confirmation.remaining_amount);
+              const remainingLabel = document.getElementById('remaining-amount');
+              const collectedLabel = document.getElementById('collected-amount');
+              if (remainingLabel) {
+                remainingLabel.textContent = `Осталось ${formatAmount(remainingAmount)} ₽`;
+              }
+              if (collectedLabel) {
+                collectedLabel.textContent = `Собрано ${formatAmount(data.total_amount - remainingAmount)} ₽ из ${formatAmount(data.total_amount)} ₽`;
+              }
+            }
             const pill = app.querySelector('.status-pill');
             if (pill) {
               pill.textContent = 'Оплачено';
@@ -108,7 +149,7 @@
             }
           } catch (error) {
             btn.disabled = false;
-            btn.textContent = 'Я оплатил';
+            btn.textContent = idleButtonLabel;
             alert(error.message || 'Не удалось подтвердить оплату, попробуйте ещё раз');
           }
         });
@@ -119,6 +160,10 @@
       const div = document.createElement('div');
       div.textContent = String(str ?? '');
       return div.innerHTML;
+    }
+
+    function formatAmount(amount) {
+      return Number(amount).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
     init();
