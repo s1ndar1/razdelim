@@ -49,54 +49,39 @@ class BaseMaxSDK:
 class MaxSDK(BaseMaxSDK):
     """Обычный SDK для работы с MAX API на сервере."""
 
-    async def send_message(self, user_id: int, text: str, buttons: Optional[list] = None) -> httpx.Response:
+    async def send_message(
+        self,
+        user_id: Optional[int] = None,
+        text: str = "",
+        buttons: Optional[list] = None,
+        *,
+        chat_id: Optional[int] = None,
+    ) -> httpx.Response:
+        if (user_id is None) == (chat_id is None):
+            raise ValueError("Укажите ровно один идентификатор: user_id или chat_id")
+
         payload: Dict[str, Any] = {"text": text}
         if buttons:
             payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
 
         return await self.post(
             "/messages",
-            params={"user_id": user_id, "access_token": self.config.access_token},
+            params={"user_id": user_id} if user_id is not None else {"chat_id": chat_id},
             json=payload,
+            headers={"Authorization": self.config.access_token},
         )
 
     async def send_text(self, user_id: int, text: str) -> httpx.Response:
         return await self.send_message(user_id=user_id, text=text)
 
     async def get_self(self) -> httpx.Response:
-        return await self.get("/me", params={"access_token": self.config.access_token})
+        return await self.get("/me", headers={"Authorization": self.config.access_token})
 
     async def get_user(self, user_id: int) -> httpx.Response:
-        return await self.get(f"/users/{user_id}", params={"access_token": self.config.access_token})
-
-
-class ParentMaxSDK:
-    """Родительский SDK для окружения, в котором открыто мини-приложение."""
-
-    def __init__(self, app_name: str = ""):
-        self.app_name = app_name
-
-    def build_start_link(self, start_param: str) -> str:
-        if not self.app_name:
-            return f"https://max.ru/?startapp={start_param}"
-        return f"https://max.ru/{self.app_name}?startapp={start_param}"
-
-    def build_parent_payload(self, event: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return {
-            "type": event,
-            "payload": payload or {},
-            "source": "max-parent-sdk",
-        }
-
-    def read_init_data(self) -> Optional[str]:
-        try:
-            import js  # type: ignore
-
-            return js.window.WebApp.initData if hasattr(js, "window") else None
-        except Exception:
-            return None
+        return await self.get(
+            f"/users/{user_id}",
+            headers={"Authorization": self.config.access_token},
+        )
 
 
 MaxApiSDK = MaxSDK
-max_api_sdk = MaxSDK()
-parent_max_sdk = ParentMaxSDK()

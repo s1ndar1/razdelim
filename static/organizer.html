@@ -135,7 +135,6 @@
   </div>
 
   <script src="/static/max-sdk.js"></script>
-  <script src="/static/max-parent-sdk.js"></script>
   <script>
     const form = document.getElementById('session-form');
     const resultBox = document.getElementById('result');
@@ -150,7 +149,14 @@
         total_amount: Number(formData.get('total_amount')),
         head_count: Number(formData.get('head_count')),
         requisites: formData.get('requisites').trim(),
+        init_data: window.MaxSdk.getInitData(),
       };
+
+      if (!payload.init_data) {
+        linkBox.textContent = 'Откройте создание сбора через бота MAX.';
+        resultBox.classList.add('visible');
+        return;
+      }
 
       const submitBtn = form.querySelector('button');
       submitBtn.disabled = true;
@@ -169,7 +175,20 @@
         }
 
         const data = await response.json();
-        linkBox.innerHTML = `<a href="${data.link}" target="_blank" rel="noreferrer">${data.link}</a>`;
+        const participantLink = document.createElement('a');
+        participantLink.href = data.link;
+        participantLink.target = '_blank';
+        participantLink.rel = 'noreferrer';
+        participantLink.textContent = data.link;
+        const statusLink = document.createElement('a');
+        statusLink.href = `/status?session_id=${encodeURIComponent(data.id)}`;
+        statusLink.textContent = 'Открыть статус сбора';
+        linkBox.replaceChildren(
+          document.createTextNode('Ссылка участникам: '),
+          participantLink,
+          document.createElement('br'),
+          statusLink,
+        );
         resultBox.classList.add('visible');
       } catch (error) {
         linkBox.textContent = error.message || 'Ошибка';

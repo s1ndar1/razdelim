@@ -12,7 +12,6 @@
   </div>
 
   <script src="/static/max-sdk.js"></script>
-  <script src="/static/max-parent-sdk.js"></script>
   <script>
     const API_BASE = window.location.origin;
 
@@ -21,8 +20,18 @@
       const startParam = window.WebApp?.initDataUnsafe?.start_param;
       const initData = window.WebApp?.initData;
 
-      if (!startParam || !initData) {
+      if (!initData) {
         app.innerHTML = '<div class="card"><span class="label">Сессия</span><h2>Ссылка не найдена</h2><p class="meta">Откройте мини-приложение по ссылке из чата, чтобы присоединиться к сбору.</p></div>';
+        return;
+      }
+
+      if (startParam === 'organizer') {
+        window.location.replace('/organizer');
+        return;
+      }
+
+      if (!startParam) {
+        app.innerHTML = '<div class="card"><span class="label">Ссылка</span><h2>Сбор не найден</h2><p class="meta">Откройте ссылку участника из чата с организатором.</p></div>';
         return;
       }
 

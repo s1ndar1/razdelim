@@ -8,6 +8,7 @@ class SessionCreate(BaseModel):
     total_amount: float
     head_count: int
     requisites: str
+    init_data: str
 
 
 class SessionOut(BaseModel):

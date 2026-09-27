@@ -123,15 +123,25 @@
   </div>
 
   <script src="/static/max-sdk.js"></script>
-  <script src="/static/max-parent-sdk.js"></script>
   <script>
     const API_BASE = window.location.origin;
     const sessionInput = document.getElementById('session-id');
     const loadBtn = document.getElementById('load-btn');
     const summary = document.getElementById('summary');
     const tableWrap = document.getElementById('table-wrap');
+    const initData = window.MaxSdk.getInitData();
+    const requestedSessionId = new URLSearchParams(window.location.search).get('session_id');
+
+    if (requestedSessionId) {
+      sessionInput.value = requestedSessionId;
+    }
 
     async function loadStatus() {
+      if (!initData) {
+        tableWrap.innerHTML = '<div class="empty">Откройте статус сбора через бота MAX.</div>';
+        return;
+      }
+
       const id = sessionInput.value.trim();
       if (!id) {
         tableWrap.innerHTML = '<div class="empty">Введите ID сессии.</div>';
@@ -142,7 +152,9 @@
       loadBtn.textContent = 'Загрузка...';
 
       try {
-        const response = await fetch(`${API_BASE}/sessions/${id}/status`);
+        const response = await fetch(`${API_BASE}/sessions/${id}/status`, {
+          headers: { 'X-Max-Init-Data': initData },
+        });
         if (!response.ok) {
           throw new Error('Сессия не найдена');
         }
@@ -194,7 +206,7 @@
           <tbody>
             ${data.participants.map((p) => `
               <tr>
-                <td>${p.first_name || 'Участник ' + p.user_id}</td>
+                <td>${escapeHtml(p.first_name || 'Участник ' + p.user_id)}</td>
                 <td>${Number(p.share_amount).toFixed(0)} ₽</td>
                 <td><span class="status">${p.status === 'paid' ? 'Оплатил' : 'Ожидает'}</span></td>
               </tr>
@@ -202,6 +214,12 @@
           </tbody>
         </table>
       `;
+    }
+
+    function escapeHtml(value) {
+      const element = document.createElement('span');
+      element.textContent = String(value ?? '');
+      return element.innerHTML;
     }
 
     loadBtn.addEventListener('click', loadStatus);

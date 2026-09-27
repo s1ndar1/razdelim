@@ -1,11 +1,16 @@
 import hashlib
 import hmac
 import json
+import time
 from typing import Optional
 from urllib.parse import unquote
 
 
-def validate_init_data(init_data: str, bot_token: str) -> Optional[dict]:
+def validate_init_data(
+    init_data: str,
+    bot_token: str,
+    max_age_seconds: int = 86400,
+) -> Optional[dict]:
     """
     Проверяет подлинность initData мини-приложения MAX.
     Алгоритм: https://dev.max.ru/docs/webapps/validation
@@ -37,6 +42,14 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[dict]:
         return None
 
     result = dict(decoded)
+    try:
+        auth_date = int(result["auth_date"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    current_time = int(time.time())
+    if auth_date > current_time + 60 or current_time - auth_date > max_age_seconds:
+        return None
+
     if "user" in result:
         try:
             result["user"] = json.loads(result["user"])

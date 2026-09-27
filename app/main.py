@@ -1,17 +1,19 @@
 import secrets
 import string
+import hmac
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlmodel import Session, select
 
 from .bot import send_message
-from .config import BOT_NAME, BOT_TOKEN
+from .config import BOT_NAME, BOT_TOKEN, MAX_INIT_DATA_MAX_AGE_SECONDS, MAX_WEBHOOK_SECRET
 from .database import engine, get_session, init_db
 from .models import BotUser, Participant, ParticipantStatus, PaymentSession
 from .schemas import (
@@ -37,6 +39,28 @@ def serialize_session(payment_session: PaymentSession) -> SessionOut:
         per_head=round(payment_session.total_amount / payment_session.head_count, 2),
         link=f"https://max.ru/{BOT_NAME}?startapp={payment_session.token}",
     )
+
+
+def require_user_id(init_data: Optional[str]) -> int:
+    payload = validate_max_init_data(init_data)
+    user = payload.get("user") if payload else None
+    user_id = user.get("id") if isinstance(user, dict) else None
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        raise HTTPException(401, "Не удалось подтвердить пользователя MAX")
+    return user_id
+
+
+def validate_max_init_data(init_data: str) -> dict:
+    if not BOT_TOKEN:
+        raise HTTPException(503, "BOT_TOKEN не настроен")
+    payload = validate_init_data(
+        init_data,
+        BOT_TOKEN,
+        max_age_seconds=MAX_INIT_DATA_MAX_AGE_SECONDS,
+    )
+    if payload is None:
+        raise HTTPException(401, "Не удалось подтвердить подлинность initData")
+    return payload
 
 
 @asynccontextmanager
@@ -78,17 +102,28 @@ def health_check():
 
 
 @app.get("/sessions", response_model=list[SessionOut])
-def list_sessions(session: Session = Depends(get_session)):
+def list_sessions(
+    x_max_init_data: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
+    organizer_id = require_user_id(x_max_init_data)
     payment_sessions = session.exec(
-        select(PaymentSession).order_by(PaymentSession.id.desc())
+        select(PaymentSession)
+        .where(PaymentSession.organizer_id == organizer_id)
+        .order_by(PaymentSession.id.desc())
     ).all()
     return [serialize_session(item) for item in payment_sessions]
 
 
 @app.get("/sessions/{session_id}", response_model=SessionOut)
-def get_session_by_id(session_id: int, session: Session = Depends(get_session)):
+def get_session_by_id(
+    session_id: int,
+    x_max_init_data: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
+    organizer_id = require_user_id(x_max_init_data)
     payment_session = session.get(PaymentSession, session_id)
-    if not payment_session:
+    if not payment_session or payment_session.organizer_id != organizer_id:
         raise HTTPException(404, "Сессия не найдена")
     return serialize_session(payment_session)
 
@@ -96,6 +131,7 @@ def get_session_by_id(session_id: int, session: Session = Depends(get_session)):
 @app.post("/sessions", response_model=SessionOut)
 def create_session(data: SessionCreate, session: Session = Depends(get_session)):
     """Организатор создаёт запрос на скидывание. Возвращает диплинк для группы."""
+    organizer_id = require_user_id(data.init_data)
     if data.head_count < 1:
         raise HTTPException(400, "head_count должен быть не меньше 1")
     if data.total_amount <= 0:
@@ -104,6 +140,7 @@ def create_session(data: SessionCreate, session: Session = Depends(get_session))
     token = "".join(secrets.choice(TOKEN_ALPHABET) for _ in range(12))
 
     payment_session = PaymentSession(
+        organizer_id=organizer_id,
         title=data.title,
         total_amount=data.total_amount,
         head_count=data.head_count,
@@ -123,9 +160,7 @@ def join_session(data: JoinRequest, session: Session = Depends(get_session)):
     Вызывается мини-приложением сразу при открытии по диплинку.
     initData валидируется по HMAC — user_id берём только оттуда, никогда из тела запроса.
     """
-    payload = validate_init_data(data.init_data, BOT_TOKEN)
-    if payload is None:
-        raise HTTPException(401, "Не удалось подтвердить подлинность initData")
+    payload = validate_max_init_data(data.init_data)
 
     user = payload.get("user")
     if not isinstance(user, dict) or "id" not in user:
@@ -173,9 +208,7 @@ def confirm_payment(
     session: Session = Depends(get_session),
 ):
     """Участник вручную подтверждает, что перевёл деньги по реквизитам."""
-    payload = validate_init_data(data.init_data, BOT_TOKEN)
-    if payload is None:
-        raise HTTPException(401, "Не удалось подтвердить подлинность initData")
+    payload = validate_max_init_data(data.init_data)
 
     user = payload.get("user") or {}
     user_id = user.get("id")
@@ -207,10 +240,15 @@ def confirm_payment(
 
 
 @app.get("/sessions/{session_id}/status", response_model=SessionStatusOut)
-def session_status(session_id: int, session: Session = Depends(get_session)):
+def session_status(
+    session_id: int,
+    x_max_init_data: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     """Табличка для организатора: кто присоединился и кто уже оплатил."""
+    organizer_id = require_user_id(x_max_init_data)
     payment_session = session.get(PaymentSession, session_id)
-    if not payment_session:
+    if not payment_session or payment_session.organizer_id != organizer_id:
         raise HTTPException(404, "Сессия не найдена")
 
     participants = session.exec(
@@ -237,12 +275,24 @@ def session_status(session_id: int, session: Session = Depends(get_session)):
 
 
 @app.post("/webhook/max")
-async def max_webhook(update: dict, session: Session = Depends(get_session)):
+async def max_webhook(
+    update: dict,
+    x_max_bot_api_secret: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     """
     Слушает события бота Max. Единственное, что нам здесь нужно —
     запомнить chat_id, когда пользователь стартует бота (bot_started),
     чтобы потом иметь право написать ему уведомление первым.
     """
+    if not MAX_WEBHOOK_SECRET:
+        raise HTTPException(503, "MAX_WEBHOOK_SECRET не настроен")
+    if not x_max_bot_api_secret or not hmac.compare_digest(
+        x_max_bot_api_secret,
+        MAX_WEBHOOK_SECRET,
+    ):
+        raise HTTPException(401, "Неверный секрет webhook")
+
     if update.get("update_type") == "bot_started":
         user = update.get("user") or {}
         user_id = user.get("user_id") or update.get("user_id")
@@ -255,4 +305,11 @@ async def max_webhook(update: dict, session: Session = Depends(get_session)):
                 existing = BotUser(user_id=user_id, chat_with_bot_id=chat_id)
             session.add(existing)
             session.commit()
+            await send_message(
+                chat_id=chat_id,
+                text=(
+                    "Привет! Здесь можно создать общий сбор и следить за подтверждениями. "
+                    f"Откройте мини-приложение MAX: https://max.ru/{BOT_NAME}?startapp=organizer"
+                ),
+            )
     return {"ok": True}
